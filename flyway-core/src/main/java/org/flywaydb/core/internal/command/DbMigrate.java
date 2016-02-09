@@ -152,6 +152,11 @@ public class DbMigrate {
 
         int migrationSuccessCount = 0;
         while (true) {
+            //this need for postgresql `create index concurrently`
+            final MigrationInfoImpl[] nonTransactionalpendingMigrations = new MigrationInfoImpl[1];
+            final boolean[] nonTransactionalOutOfOrder = new boolean[1];
+            //----------------------------------------------------
+
             final boolean firstRun = migrationSuccessCount == 0;
             MigrationVersion result = new TransactionTemplate(connectionMetaDataTable, false).execute(new TransactionCallback<MigrationVersion>() {
                 public MigrationVersion doInTransaction() {
@@ -204,9 +209,24 @@ public class DbMigrate {
                     }
 
                     boolean isOutOfOrder = pendingMigrations[0].getVersion().compareTo(currentSchemaVersion) < 0;
-                    return applyMigration(pendingMigrations[0], isOutOfOrder);
+                    if (pendingMigrations[0].getResolvedMigration().getExecutor().executeInTransaction()) {
+                        return applyMigration(pendingMigrations[0], isOutOfOrder);
+
+                    } else {
+                        //this need for postgresql `create index concurrently`
+                        nonTransactionalOutOfOrder[0] = isOutOfOrder;
+                        nonTransactionalpendingMigrations[0] = pendingMigrations[0];
+                        return null;
+                        //----------------------------------------------------
+                    }
                 }
             });
+            //this need for postgresql `create index concurrently`
+            if (nonTransactionalpendingMigrations[0] != null) {
+                result = applyMigration(nonTransactionalpendingMigrations[0], nonTransactionalOutOfOrder[0]);
+                nonTransactionalpendingMigrations[0] = null;
+            }
+            //----------------------------------------------------
             if (result == null) {
                 // No further migrations available
                 break;
